@@ -1,110 +1,111 @@
-from django.shortcuts import render, redirect, get_object_or_404
-from .models import Manutencao
-from cadastro_poste.models import Poste, Lampada
-from django.contrib.auth.decorators import login_required
+from django.shortcuts import redirect, get_object_or_404
+from django.views.generic import ListView, CreateView, UpdateView, DeleteView, View
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.urls import reverse_lazy
+from django.db.models import Q
 from django.contrib import messages
-from .forms import ManutencaoForm
+from django.utils import timezone
 from django.http import HttpResponseForbidden
 
 
-from django.db.models import Q
+from .models import Manutencao
+from cadastro_poste.models import Poste, Lampada
+from .forms import ManutencaoForm
 
 
-@login_required
-def lista_manutencoes(request):
-    busca = request.GET.get('busca', '')
-    manutencoes = Manutencao.objects.all().order_by('-data_manutencao')
+class ListaManutencoesView(LoginRequiredMixin, ListView):
+    model = Manutencao
+    template_name = 'manutencao/lista.html'
+    context_object_name = 'manutencoes'
+    ordering = ['-data_manutencao']
 
-    if busca:
-        manutencoes = manutencoes.filter(
-            Q(poste__id__icontains=busca) |
-            Q(lampada__id__icontains=busca) |
-            Q(tipo__icontains=busca) |
-            Q(descricao__icontains=busca) |
-            Q(status__icontains=busca) |
-            Q(responsavel__username__icontains=busca)
-        )
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        busca = self.request.GET.get('busca', '')
+        if busca:
+            queryset = queryset.filter(
+                Q(poste__id__icontains=busca) |
+                Q(lampada__id__icontains=busca) |
+                Q(tipo__icontains=busca) |
+                Q(descricao__icontains=busca) |
+                Q(status__icontains=busca) |
+                Q(responsavel__username__icontains=busca)
+            )
+        return queryset
 
-    postes = Poste.objects.all()
-    lampadas = Lampada.objects.all()
-
-    context = {
-        'manutencoes': manutencoes,
-        'postes': postes,
-        'lampadas': lampadas,
-        'busca': busca,
-    }
-    return render(request, 'manutencao/lista.html', context)
-
-
-@login_required
-def criar_manutencao(request):
-    tipos = Manutencao.TIPO_MANUTENCAO_CHOICES
-    status_choices = Manutencao.STATUS_CHOICES
-    postes = Poste.objects.all()
-    lampadas = Lampada.objects.all()
-
-    if request.method == 'POST':
-        form = ManutencaoForm(request.POST)
-        if form.is_valid():
-            manutencao = form.save(commit=False)
-            manutencao.responsavel = request.user
-            manutencao.save()
-            messages.success(request, 'Manutenção cadastrada com sucesso.')
-            return redirect('manutencao:lista_manutencoes')
-    else:
-        form = ManutencaoForm()
-
-    context = {
-        'form': form,
-        'tipos': tipos,
-        'status_choices': status_choices,
-        'postes': postes,
-        'lampadas': lampadas,
-    }
-    return render(request, 'manutencao/criar.html', context)
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['postes'] = Poste.objects.all()
+        context['lampadas'] = Lampada.objects.all()
+        context['busca'] = self.request.GET.get('busca', '')
+        return context
 
 
-@login_required
-def excluir_manutencao(request, id):
-    if not request.user.is_staff:
+class CriarManutencaoView(LoginRequiredMixin, CreateView):
+    model = Manutencao
+    form_class = ManutencaoForm
+    template_name = 'manutencao/criar.html'
+    success_url = reverse_lazy('manutencao:lista_manutencoes')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['tipos'] = Manutencao.TIPO_MANUTENCAO_CHOICES
+        context['status_choices'] = Manutencao.STATUS_CHOICES
+        context['postes'] = Poste.objects.all()
+        context['lampadas'] = Lampada.objects.all()
+        return context
+
+    def form_valid(self, form):
+        manutencao = form.save(commit=False)
+        manutencao.responsavel = self.request.user
+        manutencao.save()
+        messages.success(self.request, 'Manutenção cadastrada com sucesso.')
+        return super().form_valid(form)
+
+
+class EditarManutencaoView(LoginRequiredMixin, UpdateView):
+    model = Manutencao
+    form_class = ManutencaoForm
+    template_name = 'manutencao/editar.html'
+    success_url = reverse_lazy('manutencao:lista_manutencoes')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['postes'] = Poste.objects.all()
+        context['lampadas'] = Lampada.objects.all()
+        return context
+
+    def form_valid(self, form):
+        manutencao_atualizado = form.save(commit=False)
+        manutencao_atualizado.responsavel = self.get_object(
+        ).responsavel
+        manutencao_atualizado.save()
+        return redirect(self.success_url)
+
+
+class IsStaffMixin(UserPassesTestMixin):
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
         return HttpResponseForbidden("Você não tem permissão para excluir manutenções.")
 
-    manutencao = get_object_or_404(Manutencao, id=id)
-    if request.method == 'POST':
-        manutencao.delete()
-        return redirect('manutencao:lista_manutencoes')
 
-    return redirect('manutencao:lista_manutencoes')
+class ExcluirManutencaoView(LoginRequiredMixin, IsStaffMixin, DeleteView):
+    model = Manutencao
+    success_url = reverse_lazy('manutencao:lista_manutencoes')
 
 
-@login_required
-def editar_manutencao(request, id):
-    manutencao = get_object_or_404(Manutencao, pk=id)
-    if request.method == 'POST':
-        form = ManutencaoForm(request.POST, instance=manutencao)
-        if form.is_valid():
-            manutencao_atualizado = form.save(commit=False)
-            # mantém responsável original
-            manutencao_atualizado.responsavel = manutencao.responsavel
-            manutencao_atualizado.save()
-            return redirect('manutencao:lista_manutencoes')
-    else:
-        form = ManutencaoForm(instance=manutencao)
-    postes = Poste.objects.all()
-    lampadas = Lampada.objects.all()
-    return render(request, 'manutencao/editar.html', {'form': form, 'postes': postes, 'lampadas': lampadas})
+class RegistrarCorrecaoView(LoginRequiredMixin, View):
 
-@login_required
-def registrar_correcao(request):
-    if request.method == 'POST':
+    def post(self, request, *args, **kwargs):
         poste_id = request.POST.get('poste_id')
         lampada_id = request.POST.get('lampada_id')
         tipo = request.POST.get('tipo')
         descricao = request.POST.get('descricao')
 
-        poste = Poste.objects.get(id=poste_id)
-        lampada = Lampada.objects.get(id=lampada_id)
+        poste = get_object_or_404(Poste, id=poste_id)
+        lampada = get_object_or_404(Lampada, id=lampada_id)
 
         Manutencao.objects.create(
             poste=poste,
@@ -116,7 +117,7 @@ def registrar_correcao(request):
             responsavel=request.user
         )
 
-        poste.status = 3  # Corrigido
+        poste.status = 3
         poste.save()
 
         return redirect('cadastro_poste:lista_De_Postes')

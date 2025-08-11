@@ -1,43 +1,52 @@
-from usuarios.models import PerfilUsuario
-from django.views.decorators.http import require_POST
-from django.db.models import Q
 from django.contrib import messages
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate, login, logout, get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth import get_user_model
-from django.contrib.auth import update_session_auth_hash
-
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.contrib.auth.views import LogoutView as DjangoLogoutView
+from django.db.models import Q
+from django.shortcuts import redirect, get_object_or_404
+from django.urls import reverse_lazy
+from django.views import View
+from django.shortcuts import render
+from django.views.generic import FormView, CreateView, ListView, UpdateView, DeleteView
+from usuarios.models import PerfilUsuario
 
 User = get_user_model()
 
 
-def login_view(request):
-    if request.method == 'POST':
+class LoginView(FormView):
+    template_name = 'contas/login.html'
+    success_url = reverse_lazy('usuarios:lista_usuarios')
+
+    def post(self, request, *args, **kwargs):
         email = request.POST.get('email')
         senha = request.POST.get('senha')
+
         try:
             username = User.objects.get(email=email).username
         except User.DoesNotExist:
             messages.error(request, 'Usuário não encontrado.')
-
-            return render(request, 'contas/login.html')
+            return self.form_invalid(None)
 
         user = authenticate(request, username=username, password=senha)
         if user is not None:
             login(request, user)
-            return redirect('usuarios:lista_usuarios')
-
+            return redirect(self.get_success_url())
         else:
             messages.error(request, 'Senha incorreta.')
+            return self.form_invalid(None)
 
-            return render(request, 'contas/login.html')
+    def get(self, request, *args, **kwargs):
+        return self.render_to_response({})
 
-    return render(request, 'contas/login.html')
 
+class CadastroView(CreateView):
+    model = User
+    template_name = 'contas/cadastro.html'
+    fields = ['first_name', 'email', 'password']
+    success_url = reverse_lazy('usuarios:login')
 
-def cadastro_view(request):
-    if request.method == 'POST':
+    def post(self, request, *args, **kwargs):
         nome = request.POST.get('nome')
         email = request.POST.get('email')
         senha = request.POST.get('senha')
@@ -54,33 +63,41 @@ def cadastro_view(request):
         )
         usuario.save()
         messages.success(request, 'Conta criada com sucesso! Faça login.')
-        return redirect('usuarios:login')
-
-    return render(request, 'contas/cadastro.html')
+        return redirect(self.success_url)
 
 
-@login_required
-def logout_view(request):
-    logout(request)
-    messages.info(request, "Você saiu da sua conta.")
-    return redirect('usuarios:login')
+class LogoutView(LoginRequiredMixin, DjangoLogoutView):
+    next_page = reverse_lazy('usuarios:login')
+
+    def dispatch(self, request, *args, **kwargs):
+        messages.info(request, "Você saiu da sua conta.")
+        return super().dispatch(request, *args, **kwargs)
 
 
-def lista_usuarios(request):
-    busca = request.GET.get('busca', '')
-    if busca:
-        usuarios = User.objects.filter(
-            Q(first_name__icontains=busca) | Q(email__icontains=busca))
-    else:
-        usuarios = User.objects.all()
-    return render(request, 'usuarios/lista.html', {'usuarios': usuarios, 'busca': busca})
+class ListaUsuariosView(LoginRequiredMixin, ListView):
+    model = User
+    template_name = 'usuarios/lista.html'
+    context_object_name = 'usuarios'
+
+    def get_queryset(self):
+        busca = self.request.GET.get('busca', '')
+        if busca:
+            return User.objects.filter(
+                Q(first_name__icontains=busca) | Q(email__icontains=busca)
+            )
+        return User.objects.all()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['busca'] = self.request.GET.get('busca', '')
+        return context
 
 
-def editar_usuario(request, user_id):
-    user = get_object_or_404(User, id=user_id)
-    perfil, created = PerfilUsuario.objects.get_or_create(user=user)
+class EditarUsuarioView(LoginRequiredMixin, View):
+    def post(self, request, user_id):
+        user = get_object_or_404(User, id=user_id)
+        perfil, _ = PerfilUsuario.objects.get_or_create(user=user)
 
-    if request.method == 'POST':
         old_nome = user.first_name
         old_email = user.email
         old_tipo_tecnico = perfil.tipo_tecnico
@@ -103,30 +120,46 @@ def editar_usuario(request, user_id):
             mudanças.append(f"Email: '{old_email}' → '{novo_email}'")
         if old_tipo_tecnico != novo_tipo_tecnico:
             mudanças.append(
-                f"Tipo Técnico: '{old_tipo_tecnico}' → '{novo_tipo_tecnico}'")
+                f"Tipo Técnico: '{old_tipo_tecnico}' → '{novo_tipo_tecnico}'"
+            )
 
         if mudanças:
             messages.success(
-                request, "Usuário atualizado com sucesso: " + ", ".join(mudanças))
+                request, "Usuário atualizado com sucesso: " +
+                ", ".join(mudanças)
+            )
         else:
             messages.info(request, "Nenhuma alteração feita.")
 
-    return redirect('usuarios:lista_usuarios')
+        return redirect('usuarios:lista_usuarios')
 
 
-@require_POST
-def excluir_usuario(request, user_id):
-    if request.user.is_superuser:
-        User.objects.filter(id=user_id).delete()
-    return redirect('usuarios:lista_usuarios')
+class ExcluirUsuarioView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
+    model = User
+    success_url = reverse_lazy('usuarios:lista_usuarios')
+
+    def test_func(self):
+        return self.request.user.is_superuser
+
+    def delete(self, request, *args, **kwargs):
+        messages.success(request, "Usuário excluído com sucesso.")
+        return super().delete(request, *args, **kwargs)
 
 
-@login_required
-def perfil_usuario(request):
-    user = request.user
-    perfil = getattr(user, 'perfilusuario', None)
+class PerfilUsuarioView(LoginRequiredMixin, View):
+    template_name = 'usuarios/perfil.html'
 
-    if request.method == 'POST':
+    def get(self, request):
+        perfil = getattr(request.user, 'perfilusuario', None)
+        return render(request, self.template_name, {
+            'usuario': request.user,
+            'perfil': perfil,
+        })
+
+    def post(self, request):
+        user = request.user
+        perfil = getattr(user, 'perfilusuario', None)
+
         nome = request.POST.get('nome')
         email = request.POST.get('email')
 
@@ -148,16 +181,9 @@ def perfil_usuario(request):
             else:
                 user.set_password(nova_senha)
                 user.save()
-
                 update_session_auth_hash(request, user)
                 messages.success(request, 'Senha alterada com sucesso!')
-
         else:
             messages.success(request, 'Perfil atualizado com sucesso!')
 
         return redirect('usuarios:perfil')
-
-    return render(request, 'usuarios/perfil.html', {
-        'usuario': user,
-        'perfil': perfil,
-    })

@@ -1,12 +1,21 @@
 from django.urls import path
-from . import views
+from .views import (
+    ListaManutencoesView,
+    CriarManutencaoView,
+    EditarManutencaoView,
+    ExcluirManutencaoView,
+    RegistrarCorrecaoView,
+)
 
 app_name = 'manutencao'
 
 urlpatterns = [
-    path('', views.lista_manutencoes, name='lista_manutencoes'),
-    path('criar/', views.criar_manutencao, name='criar_manutencao'),
-    path('excluir/<int:id>/', views.excluir_manutencao, name='excluir_manutencao'),
-    path('editar/<int:id>/', views.editar_manutencao, name='editar_manutencao'),
-    path('registrar-correcao/', views.registrar_correcao, name='registrar_correcao'),
+    path('', ListaManutencoesView.as_view(), name='lista_manutencoes'),
+    path('criar/', CriarManutencaoView.as_view(), name='criar_manutencao'),
+    path('editar/<int:pk>/', EditarManutencaoView.as_view(),
+         name='editar_manutencao'),
+    path('excluir/<int:pk>/', ExcluirManutencaoView.as_view(),
+         name='excluir_manutencao'),
+    path('registrar_correcao/', RegistrarCorrecaoView.as_view(),
+         name='registrar_correcao'),
 ]
